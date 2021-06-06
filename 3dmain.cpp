@@ -7,14 +7,26 @@
 #include <string>
 #include <cmath>
 
-#include <unordered_set>
+#include <unordered_map>
 #include <iostream>
+
+namespace std
+{
+    template <>
+    struct hash<std::pair<size_t, size_t>>
+    {
+        size_t operator() (const std::pair<size_t, size_t>& val) const
+        {
+            return (val.first << ((sizeof(size_t) / 2) * 8)) + val.second;
+        }
+    };
+}
 
 using namespace std;
 using namespace boost::numeric::odeint;
 
 // space parameters:
-//left and right ends of x interval; x step
+//left and right ends of vector_matrix interval; vector_matrix step
 const double xb = -5.0;
 const double xe = 5.0;
 const double dx = 0.1;
@@ -51,10 +63,10 @@ double g(double x, double m0, double m1) {
     if ((x >= -1) and (x <= 1)) {
         return m1 * x;
     }
-    if (x > 1) {
+    else if (x > 1) {
         return m0 * x + (m1 - m0);
     }
-    if (x < -1) {
+    else /* (x < -1) */ {
         return m0 * x - (m1 - m0);
     }
 }
@@ -62,8 +74,10 @@ double g(double x, double m0, double m1) {
 int num_set = 2;
 
 //define type for an element of the state space - 3D vector
-using state_type = boost::array<double, 3>;
+using state_type = std::array<double, 3>;
 vector<state_type> mas;
+
+using vector_matrix = std::unordered_map<std::pair<size_t, size_t>, state_type>;
 
 void chua(const state_type &x, state_type &dxdt, double t) {
     dxdt[0] = C1_inv * G * (x[1] - x[0]) - g(x[0], m0, m1);
@@ -107,24 +121,24 @@ void write_data(vector<vector<state_type> > data) {
     fclose(fout);
 }
 
-void write_data_mat(vector<vector<state_type> > data, int num_set) {
+void write_data_mat(vector_matrix data, int num_set, size_t rows, size_t columns) {
 
     char name[20];
     sprintf(name, "CHUA_%d.mat", num_set);
 
-    std::cout << data[0].size() << " " << data[0][0].size() << " " << data.size() << endl;
+//    std::cout << data[0].size() << " " << data[0][0].size() << " " << data.size() << endl;
 
     ofstream fout(name);
 
     fout << "# name: TrajBundle" << endl;
     fout << "# type: matrix" << endl;
     fout << "# ndims: 3" << endl;
-    fout << data[0].size() << " " << data[0][0].size() << " " << data.size() << endl;
+//    fout << data[0].size() << " " << data[0][0].size() << " " << data.size() << endl;
 
-    for (int i = 0; i < data.size(); i++) {
-        for (int j = 0; j < data[0][0].size(); j++) {
-            for (int t = 0; t < data[0].size(); t++) {
-                fout << data[i][t][j] << endl;
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < 3; j++) {
+            for (int t = 0; t < columns; t++) {
+                fout << data[{i, t}][j] << endl;
             }
         }
     }
@@ -133,8 +147,8 @@ void write_data_mat(vector<vector<state_type> > data, int num_set) {
 }
 
 
-void getTrayDensityT2T(vector<vector<state_type> > data, int nx, int ny, int nz, vector<double> &DensT,
-                       vector<double> &Dens2T) {
+void getTrayDensityT2T(vector_matrix data, int nx, int ny, int nz, vector<double> &DensT,
+                       vector<double> &Dens2T, size_t rows, size_t columns) {
 // input data - trajectory bundle
 // input nx, ny, nz - sizes of initial data grid
 // output DensT - density of trajectories on [0, T]
@@ -142,27 +156,27 @@ void getTrayDensityT2T(vector<vector<state_type> > data, int nx, int ny, int nz,
 // DensT, DensT2 are one-dimesional arrays; density of trajectories in the rectangle with the index (ix,iy,iz)  has the position Dens2T[ix+iy*nx+iz*nx*ny]
 
     long long int ix, iy, iz;
-    DensT.resize(data.size());
-    Dens2T.resize(data.size());
+    DensT.resize(rows);
+    Dens2T.resize(rows);
     int size2T, sizeT, TrajNum;
-    size2T = data[0].size();
+    size2T = columns;
     sizeT = size2T / 2;
-    TrajNum = data.size();
+    TrajNum = rows;
 
     int count = 0;
     for (unsigned long long int j = 0; j < TrajNum; j++) {
         for (unsigned long int t = 0; t < sizeT; t++) {
-            ix = floor((data[j][t][0] - xb) / dx);
-            iy = floor((data[j][t][1] - yb) / dy);
-            iz = floor((data[j][t][2] - zb) / dz);
+            ix = floor((data[{j, t}][0] - xb) / dx);
+            iy = floor((data[{j, t}][1] - yb) / dy);
+            iz = floor((data[{j, t}][2] - zb) / dz);
             if ((ix >= 0 and ix < nx) and (iy >= 0 and iy < ny) and (iz >= 0 and iz < nz)) {
                 DensT[ix + iy * nx + iz * nx * ny] += 1;
             }
         }
         for (unsigned long int t = sizeT; t < sizeT; t++) {
-            ix = floor((data[j][t][0] - xb) / dx);
-            iy = floor((data[j][t][1] - yb) / dy);
-            iz = floor((data[j][t][2] - zb) / dz);
+            ix = floor((data[{j, t}][0] - xb) / dx);
+            iy = floor((data[{j, t}][1] - yb) / dy);
+            iz = floor((data[{j, t}][2] - zb) / dz);
             if ((ix >= 0 and ix < nx) and (iy >= 0 and iy < ny) and (iz >= 0 and iz < nz)) {
                 Dens2T[ix + iy * nx + iz * nx * ny] += 1;
             }
@@ -191,10 +205,13 @@ void densFilterT2T(vector<double> &dataT, vector<double> &data2T) {
     }
 }
 
-
+[i, j, k]
+{1, 0, 2}
+1 1 0 = 1
+1 1 2 = 2
 void write_data_dens_mat(vector<double> data, int num_set) {
 //write down a matrix to a file in the octave readable format
-    char name[20];
+    char name[35];
     sprintf(name, "ITER_1_dens_chua_CHUA_%d.mat", num_set);
     ofstream fout(name);
 
@@ -250,7 +267,8 @@ void filterOfGridXYZ(vector<double> dens, int Nx, int Ny, int Nz, int num_set) {
 }
 
 //-------------------------------------------------------------------------------------------------------------------------
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
 
     //set of initial data for trajectory bundle
     vector<state_type> XYZgrid_s;
@@ -274,20 +292,24 @@ int main(int argc, char **argv) {
         cout << i << " " << XYZgrid[i][0] << "\t" << XYZgrid[i][1] << "\t" << XYZgrid[i][2] << endl;
     }
 
-
     size_t steps;
 
     //trajectory bundle
-    vector<vector<state_type> > out_data(XYZgrid.size());
+//    vector<vector<state_type> > out_data(XYZgrid.size());
+    vector_matrix out_data;
 
     int nt = omp_get_max_threads();
     //omp_set_num_threads(nt);
     cout << "omp = " << nt << endl;
 
+    size_t rows_count = XYZgrid.size();
+    size_t columns_count;
+
     unsigned long long int i;
     size_t tstart = time(NULL);
     vector<state_type> x_vec;
     vector<double> times;
+
 #pragma omp parallel shared(out_data, XYZgrid) private(i, x_vec, times)
     {
 #pragma omp for schedule(static)
@@ -297,14 +319,21 @@ int main(int argc, char **argv) {
             //	steps = integrate_const(make_controlled( err_abs , err_rel , error_stepper_rkck54() ), lorenz , XYZgrid[i] , TStart , Tmax , Tstep , push_back_state_and_time( x_vec , times ));
             steps = integrate_const(make_controlled(err_abs, err_rel, error_stepper_rkck54()), chua, XYZgrid_s[i],
                                     TStart, Tmax, Tstep, push_back_state_and_time(x_vec, times));
-            out_data[i] = x_vec;
+
+            columns_count = x_vec.size();
+
+            for (int j = 0; j < columns_count; ++j)
+            {
+                out_data.insert({{i, j}, x_vec[j]});
+//                out_data[{i, j}] = x_vec[j];
+            }
         }
     }
     cout << "Time = " << time(NULL) - tstart << endl;
     cout << "size_out_data = " << out_data.size() << endl;
-    std::cout << out_data[0].size() << " " << out_data[0][0].size() << " " << out_data.size() << endl;
+//    std::cout << out_data[0].size() << " " << out_data[0][0].size() << " " << out_data.size() << endl;
 
-    write_data_mat(out_data, num_set);
+    write_data_mat(out_data, num_set, rows_count, columns_count);
 
     cout << "FINISH!!!" << endl;
 
@@ -313,7 +342,7 @@ int main(int argc, char **argv) {
     //getTrayDensity(out_data);
     vector<double> dens_data_T;
     vector<double> dens_data_2T;
-    getTrayDensityT2T(out_data, Nx, Ny, Nz, dens_data_T, dens_data_2T);
+    getTrayDensityT2T(out_data, Nx, Ny, Nz, dens_data_T, dens_data_2T, rows_count, columns_count);
 
 
     densFilterT2T(dens_data_T, dens_data_2T);
