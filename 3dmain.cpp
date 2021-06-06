@@ -1,5 +1,6 @@
 #include <iostream>
 #include <boost/numeric/odeint.hpp>
+#include <boost/functional/hash.hpp>
 #include <fstream>
 #include <vector>
 #include <omp.h>
@@ -17,7 +18,11 @@ namespace std
     {
         size_t operator() (const std::pair<size_t, size_t>& val) const
         {
-            return (val.first << ((sizeof(size_t) / 2) * 8)) + val.second;
+//            size_t seed = 0;
+//            boost::hash_combine(seed, val.first);
+//            boost::hash_combine(seed, val.second);
+//            return seed;
+            return (val.second << ((sizeof(size_t) / 2) * 8)) + val.first;
         }
     };
 }
@@ -205,10 +210,6 @@ void densFilterT2T(vector<double> &dataT, vector<double> &data2T) {
     }
 }
 
-[i, j, k]
-{1, 0, 2}
-1 1 0 = 1
-1 1 2 = 2
 void write_data_dens_mat(vector<double> data, int num_set) {
 //write down a matrix to a file in the octave readable format
     char name[35];
@@ -305,6 +306,8 @@ int main(int argc, char **argv)
     size_t rows_count = XYZgrid.size();
     size_t columns_count;
 
+    std::mutex m;
+
     unsigned long long int i;
     size_t tstart = time(NULL);
     vector<state_type> x_vec;
@@ -324,8 +327,9 @@ int main(int argc, char **argv)
 
             for (int j = 0; j < columns_count; ++j)
             {
-                out_data.insert({{i, j}, x_vec[j]});
-//                out_data[{i, j}] = x_vec[j];
+                std::lock_guard<std::mutex> lock(m);
+                out_data.insert({{i, j},
+                                 {x_vec[j][0], x_vec[j][1], x_vec[j][2]}});
             }
         }
     }
