@@ -11,6 +11,29 @@
 #include <unordered_map>
 #include <iostream>
 
+struct Vec
+{
+    ~Vec() = default;
+    Vec(const Vec&) = default;
+    Vec& operator=(const Vec&) = default;
+
+    Vec(Vec&&) = default;
+    Vec& operator=(Vec&&) = default;
+
+    explicit Vec(long long x=0, long long y=0, long long z=0) : x(x), y(y), z(z) {}
+
+    bool operator==(const Vec &rhs) const {
+        return x == rhs.x &&
+               y == rhs.y &&
+               z == rhs.z;
+    }
+
+
+    long long x = 0;
+    long long y = 0;
+    long long z = 0;
+};
+
 namespace std
 {
     template <>
@@ -25,7 +48,22 @@ namespace std
             return (val.second << ((sizeof(size_t) / 2) * 8)) + val.first;
         }
     };
+
+    template <>
+    struct hash<Vec>
+    {
+        size_t operator() (const Vec& val) const
+        {
+            size_t seed = 0;
+            boost::hash_combine(seed, val.x);
+            boost::hash_combine(seed, val.y);
+            boost::hash_combine(seed, val.z);
+            return seed;
+        }
+    };
 }
+
+using DensityType = std::unordered_map<Vec, double>;
 
 using namespace std;
 using namespace boost::numeric::odeint;
@@ -152,8 +190,8 @@ void write_data_mat(vector_matrix data, int num_set, size_t rows, size_t columns
 }
 
 
-void getTrayDensityT2T(vector_matrix data, int nx, int ny, int nz, vector<double> &DensT,
-                       vector<double> &Dens2T, size_t rows, size_t columns) {
+void getTrayDensityT2T(vector_matrix data, int nx, int ny, int nz, DensityType &DensT,
+                       DensityType &Dens2T, size_t rows, size_t columns) {
 // input data - trajectory bundle
 // input nx, ny, nz - sizes of initial data grid
 // output DensT - density of trajectories on [0, T]
@@ -161,8 +199,6 @@ void getTrayDensityT2T(vector_matrix data, int nx, int ny, int nz, vector<double
 // DensT, DensT2 are one-dimesional arrays; density of trajectories in the rectangle with the index (ix,iy,iz)  has the position Dens2T[ix+iy*nx+iz*nx*ny]
 
     long long int ix, iy, iz;
-    DensT.resize(rows);
-    Dens2T.resize(rows);
     int size2T, sizeT, TrajNum;
     size2T = columns;
     sizeT = size2T / 2;
@@ -175,42 +211,59 @@ void getTrayDensityT2T(vector_matrix data, int nx, int ny, int nz, vector<double
             iy = floor((data[{j, t}][1] - yb) / dy);
             iz = floor((data[{j, t}][2] - zb) / dz);
             if ((ix >= 0 and ix < nx) and (iy >= 0 and iy < ny) and (iz >= 0 and iz < nz)) {
-                DensT[ix + iy * nx + iz * nx * ny] += 1;
+                DensT.insert({Vec(ix, iy, iz), 0}).first->second += 1;
             }
         }
+
+        // should be empty???
         for (unsigned long int t = sizeT; t < sizeT; t++) {
             ix = floor((data[{j, t}][0] - xb) / dx);
             iy = floor((data[{j, t}][1] - yb) / dy);
             iz = floor((data[{j, t}][2] - zb) / dz);
             if ((ix >= 0 and ix < nx) and (iy >= 0 and iy < ny) and (iz >= 0 and iz < nz)) {
-                Dens2T[ix + iy * nx + iz * nx * ny] += 1;
+                Dens2T.insert({Vec(ix, iy, iz), 0}).first->second += 1;
             }
         }
     }
-    for (unsigned long int i = 0; i < Dens2T.size(); i++) {
-        Dens2T[i] += DensT[i];
+
+    for (auto& i : DensT) {
+        auto it = Dens2T.find(i.first);
+        if (it == Dens2T.end())
+        {
+            Dens2T.insert({i.first, i.second});
+        }
+        else
+        {
+            it->second += i.second;
+        }
     }
-    for (unsigned long int i = 0; i < Dens2T.size(); i++) {
-        DensT[i] = DensT[i] / (sizeT * TrajNum);
+
+    for (auto& i : DensT) {
+        i.second /= sizeT * TrajNum;
     }
-    for (unsigned long int i = 0; i < Dens2T.size(); i++) {
-        Dens2T[i] = Dens2T[i] / (size2T * TrajNum);
+    for (auto& i : Dens2T) {
+        i.second /= size2T * TrajNum;
     }
 }
 
 
-void densFilterT2T(vector<double> &dataT, vector<double> &data2T) {
+void densFilterT2T(DensityType &dataT, DensityType &data2T) {
 // input dataT - density of trajectories on [0, T]
 // input data2T - density of trajectories on [0, 2T]
 // The result of filtration is written to data2T
-    for (unsigned long int i = 0; i < dataT.size(); i++) {
-        if (data2T[i] < 0.8 * dataT[i]) {
-            data2T[i] = 0;
+    for (auto it2T = data2T.begin(); it2T != data2T.end(); ++it2T) {
+        double value = 0;
+        auto itT = dataT.find(it2T->first);
+        if (itT != dataT.end())
+            value = itT->second;
+
+        if (it2T->second < 0.8 * value) {
+            it2T = data2T.erase(it2T);
         }
     }
 }
 
-void write_data_dens_mat(vector<double> data, int num_set) {
+void write_data_dens_mat(DensityType data, int num_set, int Nx, int Ny, int Nz) {
 //write down a matrix to a file in the octave readable format
     char name[35];
     sprintf(name, "ITER_1_dens_chua_CHUA_%d.mat", num_set);
@@ -221,10 +274,17 @@ void write_data_dens_mat(vector<double> data, int num_set) {
     fout << "# rows:" << data.size() << endl;
     fout << "# colums:" << 1 << endl;
 
-    //fout<<data.size()<<endl;
-    for (int i = 0; i < data.size(); i++) {
-        fout << data[i] << endl;
-    }
+    fout << Nx * Ny * Nz <<endl;
+    for (int z = 0; z < Nz; z++)
+        for (int y = 0; y < Ny; y++)
+            for (int x = 0; x < Nx; x++)
+            {
+                auto it = data.find(Vec(x, y, z));
+                if (it != data.end())
+                    fout << it->second;
+                else
+                    fout << 0 << endl;
+            }
     fout.close();
 }
 
@@ -247,21 +307,20 @@ void write_data_gridRef_mat(vector<state_type> data, int num_set) {
 }
 
 
-void filterOfGridXYZ(vector<double> dens, int Nx, int Ny, int Nz, int num_set) {
+void filterOfGridXYZ(DensityType dens, int Nx, int Ny, int Nz) {
 //not tested!
 // filters grid accordin to density of trajectories matrix and write it to a file
     vector<state_type> XYZgrid_ref;
     unsigned long int num_cell = 0;
-    for (int z = 0; z < Nz; z++) {
-        for (int y = 0; y < Ny; y++) {
-            for (int x = 0; x < Nx; x++) {
-                if (dens[num_cell] != 0) {
-                    XYZgrid_ref.push_back(
-                            {(xb + dx / 2) + x * (dx), (yb + dy / 2) + y * (dy), (zb + dz / 2) + z * (dz)});
-                }
-                num_cell++;
-            }
-        }
+
+    for (auto& i : dens)
+    {
+        long long x = i.first.x;
+        long long y = i.first.y;
+        long long z = i.first.z;
+
+        XYZgrid_ref.push_back(
+                {(xb + dx / 2) + x * (dx), (yb + dy / 2) + y * (dy), (zb + dz / 2) + z * (dz)});
     }
 
     write_data_gridRef_mat(XYZgrid_ref, num_set);
@@ -344,14 +403,14 @@ int main(int argc, char **argv)
 
     // this part is not tested!
     //getTrayDensity(out_data);
-    vector<double> dens_data_T;
-    vector<double> dens_data_2T;
+    DensityType dens_data_T;
+    DensityType dens_data_2T;
     getTrayDensityT2T(out_data, Nx, Ny, Nz, dens_data_T, dens_data_2T, rows_count, columns_count);
 
 
     densFilterT2T(dens_data_T, dens_data_2T);
-    write_data_dens_mat(dens_data_2T, num_set);
-    filterOfGridXYZ(dens_data_2T, Nx, Ny, Nz, num_set);
+    write_data_dens_mat(dens_data_2T, num_set, Nx, Ny, Nz);
+    filterOfGridXYZ(dens_data_2T, Nx, Ny, Nz);
 
 
     return 0;
